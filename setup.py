@@ -31,6 +31,8 @@ if "--env" in sys.argv:
         __ENVIRONMENT_PATH__ = os.path.dirname(os.path.realpath(__file__)) + "/raisim_gym/env/env/ANYmal"
     elif environment == 'laikago':
         __ENVIRONMENT_PATH__ = os.path.dirname(os.path.realpath(__file__)) + "/raisim_gym/env/env/laikago"
+    elif environment == 'spacebok':
+        __ENVIRONMENT_PATH__ = os.path.dirname(os.path.realpath(__file__)) + "/raisim_gym/env/env/spacebok"
     elif environment == 'quadrotor':
         __ENVIRONMENT_PATH__ = os.path.dirname(os.path.realpath(__file__)) + "/raisim_gym/env/env/hummingbird"
     else:

@@ -297,10 +297,10 @@ class PPO2(ActorCriticRLModel):
                         print("[RAISIM_GYM] Visualizing in RaiSimOgre")
                         obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = \
                             runner.run(test_mode=True, record_video=record_video, video_name=log_dir+"/"+str(update-1)+".mp4")
-                        print("Average rewards in this test episode ", ep_infos[0]['r'])
-                        model_name = log_dir + "_Iteration_{}".format(update-1)
-                        self.save(model_name)
-                        print("Saving model " + model_name)
+                        # print("Average rewards in this test episode ", ep_infos[0]['r'])
+                        # model_name = log_dir + "_Iteration_{}".format(update-1)
+                        # self.save(model_name)
+                        print("Saving video " + log_dir+"/"+str(update-1)+".mp4")
                         # tensorboard_log(logger, ep_infos, self.sess)
 
                     assert self.n_batch % self.nminibatches == 0
@@ -506,10 +506,10 @@ class Runner(AbstractEnvRunner):
             map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward))
 
         # resetting environments, added by Jemin
-        self.obs, infos = self.env.reset_and_update_info()
+        self.obs = self.env.reset_and_update_info()
 
-        for info in infos:
-            ep_infos.append(info.get('episode'))
+        # for info in infos:
+        #     ep_infos.append(info.get('episode'))
 
         return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward
 

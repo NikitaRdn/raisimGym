@@ -43,6 +43,9 @@ class RaisimGymVecEnv(VecEnv):
                 eprew = sum(self.rewards[i])
                 eplen = len(self.rewards[i])
                 epinfo = {"r": eprew, "l": eplen}
+                for j in range(0, len(self._extraInfoNames)):
+                    key = self._extraInfoNames[j]
+                    epinfo[key] = self._extraInfo[i, j]
                 info[i]['episode'] = epinfo
                 self.rewards[i].clear()
 
@@ -54,19 +57,22 @@ class RaisimGymVecEnv(VecEnv):
         return self._observation.copy()
 
     def reset_and_update_info(self):
-        return self.reset(), self._update_epi_info()
+        return self.reset() #, self._update_epi_info()
 
-    def _update_epi_info(self):
-        info = [{} for _ in range(self.num_envs)]
-
-        for i in range(self.num_envs):
-            eprew = sum(self.rewards[i])
-            eplen = len(self.rewards[i])
-            epinfo = {"r": eprew, "l": eplen}
-            info[i]['episode'] = epinfo
-            self.rewards[i].clear()
-
-        return info
+    # def _update_epi_info(self):
+    #     info = [{} for _ in range(self.num_envs)]
+    #
+    #     for i in range(self.num_envs):
+    #         eprew = sum(self.rewards[i])
+    #         eplen = len(self.rewards[i])
+    #         epinfo = {"r": eprew, "l": eplen}
+    #         for j in range(0, len(self._extraInfoNames)):
+    #             key = self._extraInfoNames[j]
+    #             epinfo[key] = self._extraInfo[i, j]
+    #         info[i]['episode'] = epinfo
+    #         self.rewards[i].clear()
+    #
+    #     return info
 
     def render(self, mode='human'):
         raise RuntimeError('This method is not implemented')
