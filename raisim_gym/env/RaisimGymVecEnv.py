@@ -54,6 +54,8 @@ class RaisimGymVecEnv(VecEnv):
     def reset(self):
         self._reward = np.zeros(self.num_envs, dtype=np.float32)
         self.wrapper.reset(self._observation)
+        for i in range(self.num_envs):
+            self.rewards[i].clear()
         return self._observation.copy()
 
     def reset_and_update_info(self):
