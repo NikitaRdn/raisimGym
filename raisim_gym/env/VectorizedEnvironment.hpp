@@ -174,6 +174,10 @@ class VectorizedEnvironment {
       env->curriculumUpdate();
   };
 
+  void processCall(int index, std::unordered_map<std::string, double>& call){
+    environments_[index]->processCall(call);
+  }
+
  private:
 
   inline void perAgentStep(int agentId,

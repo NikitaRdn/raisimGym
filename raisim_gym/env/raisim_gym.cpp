@@ -34,6 +34,7 @@ PYBIND11_MODULE(_raisim_gym, m) {
     .def("stopRecordingVideo", &VectorizedEnvironment<ENVIRONMENT>::stopRecordingVideo)
     .def("showWindow", &VectorizedEnvironment<ENVIRONMENT>::showWindow)
     .def("hideWindow", &VectorizedEnvironment<ENVIRONMENT>::hideWindow)
-    .def("curriculumUpdate", &VectorizedEnvironment<ENVIRONMENT>::curriculumUpdate);
+    .def("curriculumUpdate", &VectorizedEnvironment<ENVIRONMENT>::curriculumUpdate)
+    .def("processCall", &VectorizedEnvironment<ENVIRONMENT>::processCall);
 
 }

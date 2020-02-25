@@ -61,6 +61,10 @@ class RaisimGymVecEnv(VecEnv):
     def reset_and_update_info(self):
         return self.reset() #, self._update_epi_info()
 
+    def processCall(self, index, call):
+        self.wrapper.processCall(index, call)
+
+
     # def _update_epi_info(self):
     #     info = [{} for _ in range(self.num_envs)]
     #
