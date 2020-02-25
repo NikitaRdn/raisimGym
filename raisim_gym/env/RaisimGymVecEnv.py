@@ -12,7 +12,7 @@ class RaisimGymVecEnv(VecEnv):
         self.num_acts = self.wrapper.getActionDim()
         self._observation_space = spaces.Box(np.ones(self.num_obs) * -np.Inf, np.ones(self.num_obs) * np.Inf,
                                              dtype=np.float32)
-        self._action_space = spaces.Box(np.ones(self.num_acts) * -1., np.ones(self.num_acts) * 1., dtype=np.float32)
+        self._action_space = spaces.Box(np.ones(self.num_acts) * -np.Inf, np.ones(self.num_acts) * np.Inf, dtype=np.float32)
         self._observation = np.zeros([self.num_envs, self.num_obs], dtype=np.float32)
         self._reward = np.zeros(self.num_envs, dtype=np.float32)
         self._done = np.zeros((self.num_envs), dtype=np.bool)

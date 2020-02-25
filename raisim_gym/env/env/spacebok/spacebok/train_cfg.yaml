@@ -2,15 +2,16 @@ seed: 1
 record_video: yes
 
 environment:
-  verbose: n
-  render: True
+  verbose: no
+  render: yes
   num_envs: 200
   num_threads: 40
   simulation_dt: 0.0025
   control_dt: 0.01
-  max_time: 4.0
+  max_time: 10.
   gravity: -9.8107
-  forwardVelRewardCoeff: 4
-  torqueRewardCoeff: 0.00001
-  clearanceRewardCoeff: 1
+  forwardVelRewardCoeff: 8
+  torqueRewardCoeff: 0.00005
+  clearanceRewardCoeff: 3
+  slipRewardCoeff: 1
   globalRewardScale: 500

@@ -111,20 +111,22 @@ class ENVIRONMENT : public RaisimGymEnv {
     READ_YAML(double, forwardVelRewardCoeff_, cfg["forwardVelRewardCoeff"])
     READ_YAML(double, torqueRewardCoeff_, cfg["torqueRewardCoeff"])
     READ_YAML(double, clearanceRewardCoeff_, cfg["clearanceRewardCoeff"])
+    READ_YAML(double, slipRewardCoeff_, cfg["slipRewardCoeff"])
     READ_YAML(double, globalRewardScale_, cfg["globalRewardScale"])
     /// parameters
     READ_YAML(bool, verbose_, cfg["verbose"])
     READ_YAML(double, gravity_, cfg["gravity"])
+    READ_YAML(double, maxTime_, cfg["max_time"])
     world_->setGravity({0., 0., gravity_});
 
-    gui::rewardLogger.init({"forwardVelReward", "torqueReward", "clearanceReward"});
+    gui::rewardLogger.init({"forwardVelReward", "torqueReward", "clearanceReward", "slipReward"});
 
     /// indices of links that can make contact with ground
-    footIndices_.insert(spacebok_->getBodyIdx("lower_leg_long_front_left"));
-    footIndices_.insert(spacebok_->getBodyIdx("lower_leg_long_front_right"));
-    footIndices_.insert(spacebok_->getBodyIdx("lower_leg_long_hind_left"));
-    footIndices_.insert(spacebok_->getBodyIdx("lower_leg_long_hind_right"));
-    foot_offset_ = {-0.25, 0, 0.0};
+    feetIndices_.push_back(spacebok_->getBodyIdx("lower_leg_long_front_left"));
+    feetIndices_.push_back(spacebok_->getBodyIdx("lower_leg_long_front_right"));
+    feetIndices_.push_back(spacebok_->getBodyIdx("lower_leg_long_hind_left"));
+    feetIndices_.push_back(spacebok_->getBodyIdx("lower_leg_long_hind_right"));
+    foot_offset_ = {-0.25, 0., 0.};
 
     /// ignore collisions between parents and child links
 //    spacebok_->ignoreCollisionBetween(0, 1);
@@ -157,6 +159,7 @@ class ENVIRONMENT : public RaisimGymEnv {
       vis->createGraphicalObject(ground, 20, "floor", "checkerboard_green");
       desired_fps_ = 60.;
       vis->setDesiredFPS(desired_fps_);
+      resetCamera();
     }
   }
 
@@ -165,13 +168,25 @@ class ENVIRONMENT : public RaisimGymEnv {
   void init() final { }
 
   void reset() final {
-    spacebok_->setState(gc_init_, gv_init_);
+//    spacebok_->setState(gc_init_, gv_init_);
+    resetToRandomState();
     updateObservation();
     totalForwardVelReward_ = 0.;
     totalTorqueReward_ = 0.;
     totalClearanceReward_ = 0.;
-    if(visualizable_)
+    totalSlipReward_ = 0.;
+    collision_=false;
+    episodeTime_ = 0;
+    if(visualizable_) {
       gui::rewardLogger.clean();
+      resetCamera();
+    }
+  }
+
+  void resetCamera(){
+    auto vis = raisim::OgreVis::get();
+    vis->select(visual_->at(0), false);
+    vis->getCameraMan()->setYawPitchDist(Ogre::Radian(3.14), Ogre::Radian(-1.3), 3, false);
   }
 
   float step(const Eigen::Ref<EigenVec>& action) final {
@@ -180,8 +195,9 @@ class ENVIRONMENT : public RaisimGymEnv {
 //    pTarget8_ = pTarget8_.cwiseProduct(actionStd_);
     pTarget8_ += actionMean_;
     pTarget_.tail(nJoints_) = pTarget8_;
-
     spacebok_->setPdTarget(pTarget_, vTarget_);
+
+    episodeTime_ += control_dt_;
     auto loopCount = int(control_dt_ / simulation_dt_ + 1e-10);
     auto visDecimation = int(1. / (desired_fps_ * simulation_dt_) + 1e-10);
 
@@ -195,24 +211,34 @@ class ENVIRONMENT : public RaisimGymEnv {
     }
 
     updateObservation();
+    updateContacts();
 
-    torqueReward_ = - torqueRewardCoeff_ * spacebok_->getGeneralizedForce().squaredNorm() / globalRewardScale_;
+    Eigen::VectorXd torques = spacebok_->getGeneralizedForce().e();
+    if(verbose_) std::cout << torques << std::endl;
+    torqueReward_ = - torqueRewardCoeff_ * torques.squaredNorm() / globalRewardScale_;
+    torques = torques.array().abs().max(15.) - 15.;
+    torqueReward_ -= 25*torqueRewardCoeff_ * torques.matrix().squaredNorm() / globalRewardScale_;
+
 //    forwardVelReward_ = forwardVelRewardCoeff_ *
 //                        std::exp(-std::pow((0.5 - bodyLinearVel_[0])/0.2, 2)) / globalRewardScale_;
-    forwardVelReward_ = -forwardVelRewardCoeff_ * (std::pow((0.5 - bodyLinearVel_[0]), 2) + std::pow((0. - bodyLinearVel_[2]), 2)) / globalRewardScale_;
+    forwardVelReward_ = -forwardVelRewardCoeff_ * (std::pow((0.5 - bodyLinearVel_[0]), 2) + 0.5*std::pow((0. - bodyLinearVel_[2]), 2)) / globalRewardScale_;
 //    forwardVelReward_ = forwardVelRewardCoeff_ * bodyLinearVel_[0] / globalRewardScale_;
+    slipReward_ = slipRewardCoeff_ * (0.5*(feetContacts_==1).count() - (feetContacts_==-1).count()) / globalRewardScale_;
     clearanceReward_ = 0.;
-    for(const auto& foot_index: footIndices_){
-      raisim::Vec<3> foot_pos;
-      raisim::Vec<3> foot_vel;
+    for(const int foot_index: feetIndices_){
+      if(feetContacts_[foot_index]!=0)
+        continue;
+      raisim::Vec<3> foot_pos{};
+      raisim::Vec<3> foot_vel{};
       raisim::Mat<3,3> rot;
+//      spacebok_->getPosition_W(foot_index,foot_offset_,foot_pos);
       spacebok_->getBodyOrientation(foot_index, rot);
       spacebok_->getBodyPosition(foot_index, foot_pos);
       foot_pos.e() += rot.e()*foot_offset_.e();
       spacebok_->getVelocity(foot_index, foot_offset_, foot_vel);
       foot_vel[2] = 0.;
-      clearanceReward_ -= clearanceRewardCoeff_ *std::abs(0.08 - foot_pos[2])*foot_vel.norm();
-      if(verbose_) std::cout << "clearance: " << foot_pos[2] << std::endl;
+      clearanceReward_ -= clearanceRewardCoeff_ * std::abs(0.08 - foot_pos[2])*foot_vel.norm();
+      if(verbose_) std::cout << "foot vel x: " << foot_vel[0] << std::endl;
     }
     clearanceReward_ /= globalRewardScale_;
 
@@ -220,24 +246,21 @@ class ENVIRONMENT : public RaisimGymEnv {
       gui::rewardLogger.log("torqueReward", torqueReward_);
       gui::rewardLogger.log("forwardVelReward", forwardVelReward_);
       gui::rewardLogger.log("clearanceReward", clearanceReward_);
-
-      /// reset camera
-      auto vis = raisim::OgreVis::get();
-
-      vis->select(visual_->at(0), false);
-      vis->getCameraMan()->setYawPitchDist(Ogre::Radian(3.14), Ogre::Radian(-1.3), 3, true);
+      gui::rewardLogger.log("slipReward", slipReward_);
     }
 
     totalForwardVelReward_ += forwardVelReward_;
     totalTorqueReward_ += torqueReward_;
     totalClearanceReward_ += clearanceReward_;
-    return torqueReward_ + forwardVelReward_ + clearanceReward_;
+    totalSlipReward_ += slipReward_;
+    return torqueReward_ + forwardVelReward_ + clearanceReward_+ slipReward_;
   }
 
   void updateExtraInfo() final {
     extraInfo_["ep_forward_vel_reward"] = totalForwardVelReward_;
     extraInfo_["ep_torque_reward"] = totalTorqueReward_;
     extraInfo_["ep_clearance_reward"] = totalClearanceReward_;
+    extraInfo_["ep_slip_reward"] = totalSlipReward_;
   }
 
   void updateObservation() {
@@ -268,6 +291,61 @@ class ENVIRONMENT : public RaisimGymEnv {
     obScaled_ = (obDouble_-obMean_).cwiseQuotient(obStd_);
   }
 
+  void resetToRandomState(){
+    double d_height = sampleUniform(0., 0.2);
+    raisim::Vec<3> rpy{sampleUniform(-0.1, 0.1),
+                          sampleUniform(-0.1, 0.1),
+                          sampleUniform(-M_PI, M_PI)};
+    raisim::Vec<4> quat;
+    raisim::eulerVecToQuat(rpy, quat);
+    Eigen::VectorXd d_joint_pos(nJoints_) ;
+    for(int i=0; i < nJoints_; i++){
+      d_joint_pos(i) = sampleUniform(-0.25, 0.25);
+    }
+    gc_ = gc_init_;
+    gc_(2) +=d_height;
+    gc_.segment(3,4) = quat.e();
+    gc_.tail(nJoints_) += d_joint_pos;
+    spacebok_->setState(gc_, gv_init_);
+  }
+
+  void updateContacts() {
+    feetContacts_.setZero();
+    auto activeContacts = spacebok_->getContacts();
+    for (size_t c = 0; c < spacebok_->getContacts().size(); c++) {
+      const auto& contact = activeContacts[c];
+      if (contact.skip()) {
+        continue;
+      }
+      size_t foot = -1;
+      size_t idx = contact.getlocalBodyIndex();
+      for(size_t k =0; k<4; k++) {
+        if (feetIndices_[k] == idx)
+          foot = k;
+      }
+      if(foot==-1){
+        collision_=true;
+        return;
+      }
+      raisim::Vec<3> vel;
+      raisim::Vec<3> pos;
+      spacebok_->getBodyPosition(idx,pos);
+          if((contact.getPosition().e() - pos.e()).norm() < 0.2){
+            collision_ = true;
+            return;
+          }
+      spacebok_->getContactPointVel(c, vel);
+//        feetContactVelocities_[k] = vel.e();
+      if (vel.e().head(2).norm() > 0.001) {
+        feetContacts_[foot] = -1;
+        if(verbose_) std::cout << "slip foot" <<foot << std::endl;
+      } else {
+        feetContacts_[foot] = 1;
+        if(verbose_) std::cout << "contact" << foot << std::endl;
+      }
+    }
+  }
+
   void observe(Eigen::Ref<EigenVec> ob) final {
     /// convert it to float
     ob = obScaled_.cast<float>();
@@ -277,6 +355,8 @@ class ENVIRONMENT : public RaisimGymEnv {
     terminalReward = float(terminalRewardCoeff_);
 //    /// check that joint limits are respected
     auto joints = gc_.tail(nJoints_);
+    if(collision_)
+      return true;
     for(int i=0; i<4; i++){
       double j1 = joints(2*i) + M_PI / 4.;
       double j2 = joints(2*i+1) + M_PI / 2.;
@@ -294,26 +374,30 @@ class ENVIRONMENT : public RaisimGymEnv {
 //      if(footIndices_.find(contact.getlocalBodyIndex()) == footIndices_.end() or
 //         contact.getPairObjectIndex() != groundIndex_) {
 //        std::cout << "crashed local: "<< spacebok_->getBodyNames()[contact.getlocalBodyIndex()]
-////        <<" other: "
-////        << world_->getObject(contact.getPairObjectIndex())->getName() <<  std::endl;
-////          << spacebok_->getBodyNames()[
-////            spacebok_->getContacts()[contact.getPairContactIndexInPairObject()].getlocalBodyIndex()
-////            ]
+//        <<" other: "
+//        << world_->getObject(contact.getPairObjectIndex())->getName() <<  std::endl;
+//          << spacebok_->getBodyNames()[
+//            spacebok_->getContacts()[contact.getPairContactIndexInPairObject()].getlocalBodyIndex()
+//            ]
 //            << std::endl;
 //
 //        return true;
 //      }
-    for(auto& contact: spacebok_->getContacts())
-      if(footIndices_.find(contact.getlocalBodyIndex()) == footIndices_.end()) {
-        return true;
-      }
+//    for(auto& contact: spacebok_->getContacts())
+//      if(feetIndices_.find(contact.getlocalBodyIndex()) == feetIndices_.end()) {
+//        return true;
+//      }
 
     terminalReward = 0.;
-    return false;
+    return episodeTime_ > maxTime_;
   }
 
   void setSeed(int seed) final {
     std::srand(seed);
+  }
+
+  double sampleUniform(double a, double b){
+    return a + std::rand() / (RAND_MAX+1.)*(b-a);
   }
 
   void close() final {
@@ -321,6 +405,7 @@ class ENVIRONMENT : public RaisimGymEnv {
 
  private:
   bool verbose_ = false;
+  double episodeTime_ = 0., maxTime_ = 0.;
   double gravity_ = -9.8107;
   int gcDim_, gvDim_, nJoints_;
   bool visualizable_ = false;
@@ -333,13 +418,16 @@ class ENVIRONMENT : public RaisimGymEnv {
   double forwardVelRewardCoeff_ = 0., forwardVelReward_ = 0., totalForwardVelReward_ = 0.;
   double torqueRewardCoeff_ = 0., torqueReward_ = 0., totalTorqueReward_;
   double clearanceRewardCoeff_ = 0., clearanceReward_ = 0., totalClearanceReward_ = 0.;
+  double slipRewardCoeff_ = 0., slipReward_ = 0., totalSlipReward_ = 0.;
   double globalRewardScale_ = 1.;
   double desired_fps_ = 60.;
   int visualizationCounter_=0;
+  bool collision_ = false;
+  Eigen::Array4i feetContacts_;
   Eigen::VectorXd actionMean_, actionStd_, obMean_, obStd_;
   Eigen::VectorXd obDouble_, obScaled_;
   Eigen::Vector3d bodyLinearVel_, bodyAngularVel_;
-  std::set<size_t> footIndices_;
+  std::vector<size_t> feetIndices_;
   raisim::Vec<3> foot_offset_;
 };
 
