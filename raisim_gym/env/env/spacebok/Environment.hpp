@@ -26,10 +26,12 @@
 *
 *   observation space = [ height                                                      n =  1, si =  0
 *                         z-axis in world frame expressed in body frame (R_b.row(2))  n =  3, si =  1
+ *                        target forward vel                                          n = 1
 *                         joint angles,                                               n =  8, si =  4
 *                         body Linear velocities,                                     n =  3, si = 16
 *                         body Angular velocities,                                    n =  3, si = 19
-*                         joint velocities,                                           n =  8, si = 22 ] total 26
+*                         joint velocities,                                           n =  8, si = 22
+ *                        previous torques                                            n = 8] total 35
 *
 */
 
@@ -77,11 +79,15 @@ namespace raisim {
       pTarget_.setZero(gcDim_);
       vTarget_.setZero(gvDim_);
       pTarget8_.setZero(nJoints_);
+      previousTorques_.setZero(nJoints_);
 
       /// this is a good standing  configuration of spacebok
       gc_init_ << 0, 0, 0.54, 1.0, 0.0, 0.0, 0.0, -0.45, 0.4, -0.45, 0.4, 0.05, 0.45, 0.05, 0.45;
 
       /// set pd gains
+      Eigen::VectorXd upper = Eigen::VectorXd::Constant(gvDim_, 25.);
+      Eigen::VectorXd lower = Eigen::VectorXd::Constant(gvDim_, -25.);
+      spacebok_->setActuationLimits(upper, lower);
       Eigen::VectorXd jointPgain(gvDim_), jointDgain(gvDim_);
       jointPgain.setZero();
       jointPgain.tail(nJoints_).setConstant(60.0);
@@ -91,7 +97,7 @@ namespace raisim {
       spacebok_->setGeneralizedForce(Eigen::VectorXd::Zero(gvDim_));
 
       /// MUST BE DONE FOR ALL ENVIRONMENTS
-      obDim_ = 26; /// convention described on top
+      obDim_ = 27; /// convention described on top
       actionDim_ = nJoints_;
       actionMean_.setZero(actionDim_);
       actionStd_.setZero(actionDim_);
@@ -104,16 +110,20 @@ namespace raisim {
 
       obMean_ << 0.44, /// average height
           0.0, 0.0, 0.0, /// gravity axis 3
-          gc_init_.tail(nJoints_), /// joint position 12
+          0.,
+          gc_init_.tail(nJoints_), /// joint position
           Eigen::VectorXd::Constant(6, 0.0), /// body lin/ang vel 6
-          Eigen::VectorXd::Constant(nJoints_, 0.0); /// joint vel history
+          Eigen::VectorXd::Constant(nJoints_, 0.0); /// joint vel
+//          Eigen::VectorXd::Constant(nJoints_, 0.0); /// previous torques
 
-      obStd_ << 0.5, /// average height
+      obStd_ << 0.1, /// average height
           Eigen::VectorXd::Constant(3, 0.7), /// gravity axes angles
-          Eigen::VectorXd::Constant(nJoints_, 1.0 / 1.0), /// joint angles
-          Eigen::VectorXd::Constant(3, 2.0), /// linear velocity
-          Eigen::VectorXd::Constant(3, 4.0), /// angular velocities
-          Eigen::VectorXd::Constant(nJoints_, 10.0); /// joint velocities
+          1.,
+          Eigen::VectorXd::Constant(nJoints_, 1.), /// joint angles
+          Eigen::VectorXd::Constant(3, 2.), /// linear velocity
+          Eigen::VectorXd::Constant(3, 4.), /// angular velocities
+          Eigen::VectorXd::Constant(nJoints_, 10.); /// joint velocities
+//          Eigen::VectorXd::Constant(nJoints_, 20.); /// previous torques
 
       /// Reward coefficients
       READ_YAML(double, forwardVelRewardCoeff_, cfg["forwardVelRewardCoeff"])
@@ -127,6 +137,7 @@ namespace raisim {
       READ_YAML(bool, verbose_, cfg["verbose"])
       READ_YAML(double, gravity_, cfg["gravity"])
       READ_YAML(double, maxTime_, cfg["max_time"])
+
       world_->setGravity({0., 0., gravity_});
 
       gui::rewardLogger.init({"forwardVelReward", "torqueReward", "clearanceReward", "slipReward"});
@@ -187,6 +198,7 @@ namespace raisim {
       totalSlipReward_ = 0.;
       totalOrientReward_ = 0.;
       totalGaitReward_ = 0.;
+      targetVelx_ = sampleUniformInt(-2, 2) / 2.;
       collision_ = false;
       episodeTime_ = 0;
       if (visualizable_) {
@@ -204,7 +216,7 @@ namespace raisim {
     float step(const Eigen::Ref<EigenVec> &action) final {
       /// action scaling
       pTarget8_ = action.cast<double>();
-//    pTarget8_ = pTarget8_.cwiseProduct(actionStd_);
+      pTarget8_ = pTarget8_.cwiseProduct(actionStd_);
       pTarget8_ += actionMean_;
       pTarget_.tail(nJoints_) = pTarget8_;
       spacebok_->setPdTarget(pTarget_, vTarget_);
@@ -222,28 +234,39 @@ namespace raisim {
         visualizationCounter_++;
       }
 
+      if(episodeTime_ >= maxTime_ / 2 and episodeTime_ < maxTime_ / 2 + control_dt_){
+        targetVelx_ = sampleUniformInt(-2, 2) / 2.;
+      }
+
       updateObservation();
       updateContacts();
 
-      Eigen::VectorXd torques = spacebok_->getGeneralizedForce().e();
-      if (verbose_) std::cout << torques << std::endl;
+      Eigen::VectorXd torques = spacebok_->getGeneralizedForce().e().tail(nJoints_);
       torqueReward_ = -torqueRewardCoeff_ * torques.squaredNorm() / globalRewardScale_;
+      torqueReward_ -= 2*torqueRewardCoeff_*(previousTorques_ - torques).squaredNorm() / globalRewardScale_;
+      previousTorques_ = torques;
 //    torques = torques.array().abs().max(10.) - 10.;
 //    torqueReward_ -= 5*torqueRewardCoeff_ * torques.matrix().squaredNorm() / globalRewardScale_;
 
 //    forwardVelReward_ = forwardVelRewardCoeff_ *
 //                        std::exp(-std::pow((0.5 - bodyLinearVel_[0])/0.2, 2)) / globalRewardScale_;
-      forwardVelReward_ = -forwardVelRewardCoeff_ *
-                          (std::pow((0.5 - bodyLinearVel_[0]), 2) + 0. * std::pow((0. - bodyLinearVel_[2]), 2)) /
-                          globalRewardScale_;
+//      forwardVelReward_ = -forwardVelRewardCoeff_ *
+//                          (std::pow((targetVelx_ - bodyLinearVel_[0]), 2) + 0.25 * std::pow((0. - bodyLinearVel_[2]), 2)) /
+//                          globalRewardScale_;
+      forwardVelReward_ = forwardVelRewardCoeff_ * std::exp(-(std::pow((targetVelx_ - bodyLinearVel_[0]), 2) +
+                                                                 0. * std::pow((0. - bodyLinearVel_[2]), 2)) / .5) /
+                                                    globalRewardScale_;
 //    forwardVelReward_ = forwardVelRewardCoeff_ * bodyLinearVel_[0] / globalRewardScale_;
       slipReward_ = -slipRewardCoeff_ * (feetContacts_ == -1).count() / globalRewardScale_;
-      orientReward_ = -orientRewardCoeff_ * std::pow(measuredGravityVector_[1], 2) / globalRewardScale_;
-      gaitReward_ = -gaitRewardCoeff_ * ((action.segment(0, 2)
-                                          - action.segment(6, 2)).array().abs().sum() +
-                                         (action.segment(2, 2)
-                                          - action.segment(4, 2)).array().abs().sum())
-                    / globalRewardScale_;
+      orientReward_ = -orientRewardCoeff_ * (std::pow(measuredGravityVector_[0], 2) +
+                                             std::pow(measuredGravityVector_[1], 2)) / globalRewardScale_;
+//      gaitReward_ = -gaitRewardCoeff_ * ((action.segment(0, 2)
+//                                          - action.segment(6, 2)).array().abs().sum() +
+//                                         (action.segment(2, 2)
+//                                          - action.segment(4, 2)).array().abs().sum())
+//                                        / globalRewardScale_;
+
+        gaitReward_ = -gaitRewardCoeff_ * gv_.tail(nJoints_).squaredNorm() / globalRewardScale_;
       clearanceReward_ = 0.;
       for (int i = 0; i < feetIndices_.size(); i++) {
         if (feetContacts_[i] != 0)
@@ -308,25 +331,31 @@ namespace raisim {
       raisim::quatToRotMat(quat, rot);
       measuredGravityVector_ = rot.e().row(2);
       obDouble_.segment(1, 3) = measuredGravityVector_;
+      obDouble_(4)  = targetVelx_;
 
       /// joint angles
-      obDouble_.segment(4, nJoints_) = gc_.tail(nJoints_);
+      obDouble_.segment(5, nJoints_) = gc_.tail(nJoints_);
 
       /// body velocities
       bodyLinearVel_ = rot.e().transpose() * gv_.segment(0, 3);
       bodyAngularVel_ = rot.e().transpose() * gv_.segment(3, 3);
-      obDouble_.segment(16, 3) = bodyLinearVel_;
-      obDouble_.segment(19, 3) = bodyAngularVel_;
+      obDouble_.segment(13, 3) = bodyLinearVel_;
+      obDouble_.segment(16, 3) = bodyAngularVel_;
 
       /// joint velocities
-      obDouble_.tail(nJoints_) = gv_.tail(nJoints_);
+      obDouble_.segment(19, nJoints_) = gv_.tail(nJoints_);
+
+      /// previous torques
+//      obDouble_.segment(27, nJoints_) = previousTorques_;
+
+      /// normalize
       obScaled_ = (obDouble_ - obMean_).cwiseQuotient(obStd_);
     }
 
     void resetToRandomState() {
       double d_height = sampleUniform(0., 0.2);
-      raisim::Vec<3> rpy{sampleUniform(-0.1, 0.1),
-                         sampleUniform(-0.1, 0.1),
+      raisim::Vec<3> rpy{sampleUniform(-0.2, 0.2),
+                         sampleUniform(-0.2, 0.2),
                          sampleUniform(-M_PI, M_PI)};
       raisim::Vec<4> quat{};
       raisim::eulerVecToQuat(rpy, quat);
@@ -401,25 +430,6 @@ namespace raisim {
           return true;
         }
       }
-      /// if the contact body is not feet
-//    for(auto& contact: spacebok_->getContacts())
-//      if(footIndices_.find(contact.getlocalBodyIndex()) == footIndices_.end() or
-//         contact.getPairObjectIndex() != groundIndex_) {
-//        std::cout << "crashed local: "<< spacebok_->getBodyNames()[contact.getlocalBodyIndex()]
-//        <<" other: "
-//        << world_->getObject(contact.getPairObjectIndex())->getName() <<  std::endl;
-//          << spacebok_->getBodyNames()[
-//            spacebok_->getContacts()[contact.getPairContactIndexInPairObject()].getlocalBodyIndex()
-//            ]
-//            << std::endl;
-//
-//        return true;
-//      }
-//    for(auto& contact: spacebok_->getContacts())
-//      if(feetIndices_.find(contact.getlocalBodyIndex()) == feetIndices_.end()) {
-//        return true;
-//      }
-
       terminalReward = 0.;
       return episodeTime_ > maxTime_;
     }
@@ -432,10 +442,14 @@ namespace raisim {
       if (call.find("gravity") != call.end()) {
         world_->setGravity({0, 0, call["gravity"]});
       }
-      if (call.find("set_verbose") != call.end()){
+      else if (call.find("set_verbose") != call.end()){
         verbose_ = not verbose_;
       }
-      if (call.find("reset_state") != call.end()) {
+      else if (call.find("target_vel_x") != call.end()){
+        targetVelx_ = call["target_vel_x"];
+        std::cout << targetVelx_;
+      }
+      else if (call.find("reset_state") != call.end()) {
         reset();
         rpy[0] = call["roll"];
         rpy[1] = call["pitch"];
@@ -467,6 +481,10 @@ namespace raisim {
       return a + std::rand() / (RAND_MAX + 1.) * (b - a);
     }
 
+    int sampleUniformInt(double a, double b){
+      return std::round(sampleUniform(a - 0.5,b + 0.5));
+    }
+
     void close() final {
     }
 
@@ -492,9 +510,11 @@ namespace raisim {
     double desired_fps_ = 60.;
     int visualizationCounter_ = 0;
     bool collision_ = false;
+    double targetVelx_ = 0.5;
     Eigen::Array4i feetContacts_;
     Eigen::VectorXd actionMean_, actionStd_, obMean_, obStd_;
     Eigen::VectorXd obDouble_, obScaled_;
+    Eigen::VectorXd previousTorques_;
     Eigen::Vector3d bodyLinearVel_, bodyAngularVel_;
     Eigen::Vector3d measuredGravityVector_;
     std::vector<size_t> feetIndices_;

@@ -4,16 +4,16 @@ record_video: yes
 environment:
   verbose: no
   render: yes
-  num_envs: 200
-  num_threads: 80
+  num_envs: 100
+  num_threads: 40
   simulation_dt: 0.0025
   control_dt: 0.01
   max_time: 10.
   gravity: -9.8107
-  forwardVelRewardCoeff: 8
-  torqueRewardCoeff: 0.00005
-  clearanceRewardCoeff: 3
-  slipRewardCoeff: 1
-  orientRewardCoeff: 0
-  gaitRewardCoeff: 0
+  forwardVelRewardCoeff: 4
+  torqueRewardCoeff: 0.00025
+  clearanceRewardCoeff: 6
+  slipRewardCoeff: 1.
+  orientRewardCoeff: 10
+  gaitRewardCoeff: 0.01
   globalRewardScale: 500
